@@ -1,9 +1,14 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
 
 public class ResourceManager : MonoBehaviour
 {
+    // Text on screen
+    public TMP_Text upgradeText;
+
     // Resource storage
     public Dictionary<ResourceType, float> resources = new Dictionary<ResourceType, float>();
 
@@ -16,6 +21,9 @@ public class ResourceManager : MonoBehaviour
 
     // Upgrade storage
     public List<Upgrade> upgrades = new List<Upgrade>();
+
+    // UI Buttons for upgrades
+    public GameObject sprayUpgradeButton;
 
     void Start()
     {
@@ -49,12 +57,12 @@ public class ResourceManager : MonoBehaviour
         {
             yield return new WaitForSeconds(1f);
 
-            // Passive income
             resources[ResourceType.CreativeEnergy] += murals * muralEnergyRate;
             resources[ResourceType.Paint] += artAssistants * assistantPaintRate;
 
             CheckUpgrades();
             DisplayResources();
+            UpdateUpgradeUI();
         }
     }
 
@@ -72,7 +80,15 @@ public class ResourceManager : MonoBehaviour
         Debug.Log("Paint: " + resources[ResourceType.Paint]);
         Debug.Log("Reputation: " + resources[ResourceType.Reputation]);
         Debug.Log("----------------------");
+
+        foreach (KeyValuePair<ResourceType, float> resource in resources)
+        {
+            Debug.Log(resource.Key + ": " + resource.Value);
+        }
+
+        Debug.Log("----------------------");
     }
+
 
     // Check if upgrades become available
     void CheckUpgrades()
@@ -83,7 +99,13 @@ public class ResourceManager : MonoBehaviour
                 resources[upgrade.effect.targetResource] >= upgrade.cost)
             {
                 upgrade.state = UpgradeState.Available;
-                Debug.Log(upgrade.name + " is now AVAILABLE");
+
+                Debug.Log(upgrade.name + "AVAILABLE");
+
+                if (upgrade.name == "Better Spray Cans")
+                {
+                    sprayUpgradeButton.SetActive(true);
+                }
             }
         }
     }
@@ -103,6 +125,8 @@ public class ResourceManager : MonoBehaviour
             upgrade.state = UpgradeState.Purchased;
 
             Debug.Log("Purchased upgrade: " + upgrade.name);
+            Debug.Log("Effect Multiplier: " + upgrade.effect.multiplier);
+            Debug.Log("Effect Target Resource: " + upgrade.effect.targetResource);
         }
     }
 
@@ -112,14 +136,44 @@ public class ResourceManager : MonoBehaviour
         if (effect.targetResource == ResourceType.CreativeEnergy)
         {
             muralEnergyRate *= effect.multiplier;
+
+            Debug.Log("Creative Energy rate increased to: " + muralEnergyRate);
         }
 
         if (effect.targetResource == ResourceType.Paint)
         {
             assistantPaintRate *= effect.multiplier;
+
+            Debug.Log("Paint generation rate increased to: " + assistantPaintRate);
         }
     }
-}
+    
+    // Apply Upgrade text
+    void UpdateUpgradeUI()
+    {
+        string text = "Upgrades:\n";
+
+        foreach (Upgrade upgrade in upgrades)
+        {
+            text += upgrade.name + " - " + upgrade.state + "\n";
+        }
+
+        upgradeText.text = text;
+    }
+    
+    // Button function
+    public void BuySprayUpgrade()
+    {
+        foreach (Upgrade upgrade in upgrades)
+        {
+            if (upgrade.name == "Better Spray Cans")
+            {
+                PurchaseUpgrade(upgrade);
+                sprayUpgradeButton.SetActive(false);
+            }
+        }
+    }
+ }
 
 // Upgrade class
 public class Upgrade
@@ -167,4 +221,6 @@ public struct UpgradeEffect
         this.multiplier = multiplier;
         this.targetResource = targetResource;
     }
+
 }
+
