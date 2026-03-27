@@ -9,13 +9,17 @@ public class ResourceManager : MonoBehaviour
     // Text on screen
     public TMP_Text upgradeText;
 
+    // Resource UI texts
+    public TMP_Text creativeEnergyText;
+    public TMP_Text paintText;
+    public TMP_Text reputationText;
+
     // Resource storage
     public Dictionary<ResourceType, float> resources = new Dictionary<ResourceType, float>();
 
     // Passive income sources
     public int murals = 1;
     public int artAssistants = 1;
-
     public float muralEnergyRate = 2f;
     public float assistantPaintRate = 1f;
 
@@ -24,6 +28,9 @@ public class ResourceManager : MonoBehaviour
 
     // UI Buttons for upgrades
     public GameObject sprayUpgradeButton;
+
+    // Generators
+    public List<Generator> generators = new List<Generator>();
 
     void Start()
     {
@@ -39,7 +46,6 @@ public class ResourceManager : MonoBehaviour
             new UpgradeEffect(1.5f, ResourceType.CreativeEnergy),
             1
         ));
-
         upgrades.Add(new Upgrade(
             "Vibrant Paint",
             75,
@@ -49,6 +55,12 @@ public class ResourceManager : MonoBehaviour
 
         // Start passive income loop
         StartCoroutine(ResourceTick());
+
+        // Add generators
+        generators.Add(new GraffitiSprayer(2f, 1.2f));
+        generators.Add(new PaintMixer(1f, 1.5f));
+
+        StartCoroutine(GeneratorTick());
     }
 
     IEnumerator ResourceTick()
@@ -57,8 +69,9 @@ public class ResourceManager : MonoBehaviour
         {
             yield return new WaitForSeconds(1f);
 
-            resources[ResourceType.CreativeEnergy] += murals * muralEnergyRate;
-            resources[ResourceType.Paint] += artAssistants * assistantPaintRate;
+            // Legacy passive income
+            AddResource(ResourceType.CreativeEnergy, murals * muralEnergyRate);
+            AddResource(ResourceType.Paint, artAssistants * assistantPaintRate);
 
             CheckUpgrades();
             DisplayResources();
@@ -66,31 +79,63 @@ public class ResourceManager : MonoBehaviour
         }
     }
 
+    IEnumerator GeneratorTick()
+    {
+        while (true)
+        {
+            yield return new WaitForSeconds(1f);
+
+            foreach (Generator gen in generators)
+            {
+                if (gen is GraffitiSprayer)
+                {
+                    float current = resources[ResourceType.CreativeEnergy];
+                    gen.Produce(ref current);
+                    resources[ResourceType.CreativeEnergy] = current;
+                }
+                else if (gen is PaintMixer)
+                {
+                    float current = resources[ResourceType.Paint];
+                    gen.Produce(ref current);
+                    resources[ResourceType.Paint] = current;
+                }
+            }
+        }
+    }
+
     // Manual click action
     public void TagWall()
     {
-        resources[ResourceType.CreativeEnergy] += 1f;
+        AddResource(ResourceType.CreativeEnergy, 1f);
         Debug.Log("Tagged wall! +1 Creative Energy");
     }
 
-    // Show resources in console
+    // Helper method
+    void AddResource(ResourceType type, float amount)
+    {
+        float current = resources[type];
+        current += amount;
+        resources[type] = current;
+    }
+
+    // Display resources in UI and console
     void DisplayResources()
     {
-        Debug.Log("Creative Energy: " + resources[ResourceType.CreativeEnergy]);
-        Debug.Log("Paint: " + resources[ResourceType.Paint]);
-        Debug.Log("Reputation: " + resources[ResourceType.Reputation]);
-        Debug.Log("----------------------");
+        // Creative Energy shows 1 decimal place (tenths)
+        creativeEnergyText.text = "Creative Energy: " + resources[ResourceType.CreativeEnergy].ToString("F1");
 
+        // Paint and Reputation remain integers
+        paintText.text = "Paint: " + Mathf.FloorToInt(resources[ResourceType.Paint]);
+        reputationText.text = "Reputation: " + Mathf.FloorToInt(resources[ResourceType.Reputation]);
+
+        // Optional console logging
         foreach (KeyValuePair<ResourceType, float> resource in resources)
         {
             Debug.Log(resource.Key + ": " + resource.Value);
         }
-
         Debug.Log("----------------------");
     }
 
-
-    // Check if upgrades become available
     void CheckUpgrades()
     {
         foreach (Upgrade upgrade in upgrades)
@@ -99,56 +144,51 @@ public class ResourceManager : MonoBehaviour
                 resources[upgrade.effect.targetResource] >= upgrade.cost)
             {
                 upgrade.state = UpgradeState.Available;
-
-                Debug.Log(upgrade.name + "AVAILABLE");
+                Debug.Log(upgrade.name + " AVAILABLE");
 
                 if (upgrade.name == "Better Spray Cans")
-                {
                     sprayUpgradeButton.SetActive(true);
-                }
             }
         }
     }
 
-    // Purchase upgrade
-    public void PurchaseUpgrade(Upgrade upgrade)
+    public bool TryPurchaseUpgrade(Upgrade upgrade, out string message)
     {
         if (upgrade.state != UpgradeState.Available)
-            return;
-
-        if (resources[upgrade.effect.targetResource] >= upgrade.cost)
         {
-            resources[upgrade.effect.targetResource] -= upgrade.cost;
-
-            ApplyUpgrade(upgrade.effect);
-
-            upgrade.state = UpgradeState.Purchased;
-
-            Debug.Log("Purchased upgrade: " + upgrade.name);
-            Debug.Log("Effect Multiplier: " + upgrade.effect.multiplier);
-            Debug.Log("Effect Target Resource: " + upgrade.effect.targetResource);
+            message = "Upgrade not available";
+            return false;
         }
+
+        if (resources[upgrade.effect.targetResource] < upgrade.cost)
+        {
+            message = "Not enough resources";
+            return false;
+        }
+
+        resources[upgrade.effect.targetResource] -= upgrade.cost;
+        ApplyUpgrade(upgrade.effect);
+        upgrade.state = UpgradeState.Purchased;
+
+        message = "Purchased " + upgrade.name;
+        return true;
     }
 
-    // Apply upgrade multiplier
     void ApplyUpgrade(UpgradeEffect effect)
     {
         if (effect.targetResource == ResourceType.CreativeEnergy)
         {
             muralEnergyRate *= effect.multiplier;
-
             Debug.Log("Creative Energy rate increased to: " + muralEnergyRate);
         }
 
         if (effect.targetResource == ResourceType.Paint)
         {
             assistantPaintRate *= effect.multiplier;
-
             Debug.Log("Paint generation rate increased to: " + assistantPaintRate);
         }
     }
-    
-    // Apply Upgrade text
+
     void UpdateUpgradeUI()
     {
         string text = "Upgrades:\n";
@@ -160,21 +200,29 @@ public class ResourceManager : MonoBehaviour
 
         upgradeText.text = text;
     }
-    
-    // Button function
+
     public void BuySprayUpgrade()
     {
         foreach (Upgrade upgrade in upgrades)
         {
             if (upgrade.name == "Better Spray Cans")
             {
-                PurchaseUpgrade(upgrade);
-                sprayUpgradeButton.SetActive(false);
+                string feedback;
+                if (TryPurchaseUpgrade(upgrade, out feedback))
+                {
+                    sprayUpgradeButton.SetActive(false);
+                    Debug.Log(feedback);
+                }
+                else
+                {
+                    Debug.Log(feedback);
+                }
             }
         }
     }
- }
+}
 
+// -----------------------------
 // Upgrade class
 public class Upgrade
 {
@@ -194,7 +242,6 @@ public class Upgrade
     }
 }
 
-// Upgrade states
 public enum UpgradeState
 {
     Locked,
@@ -202,7 +249,6 @@ public enum UpgradeState
     Purchased
 }
 
-// Resource types (replaces magic strings)
 public enum ResourceType
 {
     CreativeEnergy,
@@ -210,7 +256,6 @@ public enum ResourceType
     Reputation
 }
 
-// Upgrade effect structure
 public struct UpgradeEffect
 {
     public float multiplier;
@@ -221,6 +266,52 @@ public struct UpgradeEffect
         this.multiplier = multiplier;
         this.targetResource = targetResource;
     }
-
 }
 
+// -----------------------------
+// Abstract Generator class
+public abstract class Generator
+{
+    public string generatorName;
+    public float baseProduction;
+
+    public Generator(string name, float baseProduction)
+    {
+        generatorName = name;
+        this.baseProduction = baseProduction;
+    }
+
+    public abstract void Produce(ref float resourceAmount);
+}
+
+public class GraffitiSprayer : Generator
+{
+    public float efficiency;
+
+    public GraffitiSprayer(float baseProduction, float efficiency = 1f)
+        : base("Graffiti Sprayer", baseProduction)
+    {
+        this.efficiency = efficiency;
+    }
+
+    public override void Produce(ref float resourceAmount)
+    {
+        resourceAmount += baseProduction * efficiency;
+    }
+}
+
+public class PaintMixer : Generator
+{
+    public float quality;
+
+    public PaintMixer(float baseProduction, float quality = 1f)
+        : base("Paint Mixer", baseProduction)
+    {
+        this.quality = quality;
+    }
+
+    public override void Produce(ref float resourceAmount)
+    {
+        resourceAmount += baseProduction * quality;
+    }
+}
