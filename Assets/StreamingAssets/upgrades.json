@@ -1,0 +1,18 @@
+{
+  "upgrades": [
+    {
+      "name": "Better Spray Cans",
+      "cost": 50,
+      "multiplier": 1.5,
+      "targetResource": 0,
+      "tier": 1
+    },
+    {
+      "name": "Vibrant Paint",
+      "cost": 75,
+      "multiplier": 2.0,
+      "targetResource": 1,
+      "tier": 1
+    }
+  ]
+}

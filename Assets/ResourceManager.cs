@@ -3,6 +3,31 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using System.IO;
+
+[System.Serializable] // Move data collection to file
+public class UpgradeData
+{
+    public string name;
+    public float cost;
+    public float multiplier;
+    public ResourceType targetResource;
+    public int tier;
+}
+
+[System.Serializable]
+public class UpgradeDataList
+{
+    public List<UpgradeData> upgrades;
+}
+
+[System.Serializable] // Save data
+public class SaveData
+{
+    public float creativeEnergy;
+    public float paint;
+    public float reputation;
+}
 
 public class ResourceManager : MonoBehaviour
 {
@@ -32,6 +57,13 @@ public class ResourceManager : MonoBehaviour
     // Generators
     public List<Generator> generators = new List<Generator>();
 
+    // Step E — Play session tracking
+    private float sessionStartTime;
+
+    // Auto-save timer
+    private float autoSaveTimer;
+    private float autoSaveInterval = 30f;
+
     void Start()
     {
         // Initialize resources
@@ -39,19 +71,8 @@ public class ResourceManager : MonoBehaviour
         resources.Add(ResourceType.Paint, 10f);
         resources.Add(ResourceType.Reputation, 0f);
 
-        // Create upgrades
-        upgrades.Add(new Upgrade(
-            "Better Spray Cans",
-            50,
-            new UpgradeEffect(1.5f, ResourceType.CreativeEnergy),
-            1
-        ));
-        upgrades.Add(new Upgrade(
-            "Vibrant Paint",
-            75,
-            new UpgradeEffect(2f, ResourceType.Paint),
-            1
-        ));
+        // Load upgrades from JSON file (Step C)
+        LoadUpgradesFromJSON();
 
         // Start passive income loop
         StartCoroutine(ResourceTick());
@@ -61,6 +82,25 @@ public class ResourceManager : MonoBehaviour
         generators.Add(new PaintMixer(1f, 1.5f));
 
         StartCoroutine(GeneratorTick());
+
+        // Step D — Load saved game
+        LoadGame();
+
+        // Step E — Track session start time
+        sessionStartTime = Time.time;
+    }
+
+    void Update()
+    {
+        autoSaveTimer += Time.deltaTime;
+
+        if (autoSaveTimer >= autoSaveInterval)
+        {
+            SaveGame();
+            autoSaveTimer = 0f;
+
+            Debug.Log("Auto-saved game");
+        }
     }
 
     IEnumerator ResourceTick()
@@ -103,14 +143,12 @@ public class ResourceManager : MonoBehaviour
         }
     }
 
-    // Manual click action
     public void TagWall()
     {
         AddResource(ResourceType.CreativeEnergy, 1f);
         Debug.Log("Tagged wall! +1 Creative Energy");
     }
 
-    // Helper method
     void AddResource(ResourceType type, float amount)
     {
         float current = resources[type];
@@ -118,17 +156,12 @@ public class ResourceManager : MonoBehaviour
         resources[type] = current;
     }
 
-    // Display resources in UI and console
     void DisplayResources()
     {
-        // Creative Energy shows 1 decimal place (tenths)
         creativeEnergyText.text = "Creative Energy: " + resources[ResourceType.CreativeEnergy].ToString("F1");
-
-        // Paint and Reputation remain integers
         paintText.text = "Paint: " + Mathf.FloorToInt(resources[ResourceType.Paint]);
         reputationText.text = "Reputation: " + Mathf.FloorToInt(resources[ResourceType.Reputation]);
 
-        // Optional console logging
         foreach (KeyValuePair<ResourceType, float> resource in resources)
         {
             Debug.Log(resource.Key + ": " + resource.Value);
@@ -179,13 +212,50 @@ public class ResourceManager : MonoBehaviour
         if (effect.targetResource == ResourceType.CreativeEnergy)
         {
             muralEnergyRate *= effect.multiplier;
-            Debug.Log("Creative Energy rate increased to: " + muralEnergyRate);
         }
 
         if (effect.targetResource == ResourceType.Paint)
         {
             assistantPaintRate *= effect.multiplier;
-            Debug.Log("Paint generation rate increased to: " + assistantPaintRate);
+        }
+    }
+
+    void SaveGame() // Save method
+    {
+        SaveData data = new SaveData();
+
+        data.creativeEnergy = resources[ResourceType.CreativeEnergy];
+        data.paint = resources[ResourceType.Paint];
+        data.reputation = resources[ResourceType.Reputation];
+
+        string path = Application.persistentDataPath + "/save.xml";
+
+        System.Xml.Serialization.XmlSerializer serializer =
+            new System.Xml.Serialization.XmlSerializer(typeof(SaveData));
+
+        System.IO.FileStream stream = new System.IO.FileStream(path, System.IO.FileMode.Create);
+        serializer.Serialize(stream, data);
+        stream.Close();
+    }
+
+    void LoadGame() // Load method
+    {
+        string path = Application.persistentDataPath + "/save.xml";
+
+        if (System.IO.File.Exists(path))
+        {
+            System.Xml.Serialization.XmlSerializer serializer =
+                new System.Xml.Serialization.XmlSerializer(typeof(SaveData));
+
+            System.IO.FileStream stream =
+                new System.IO.FileStream(path, System.IO.FileMode.Open);
+
+            SaveData data = serializer.Deserialize(stream) as SaveData;
+            stream.Close();
+
+            resources[ResourceType.CreativeEnergy] = data.creativeEnergy;
+            resources[ResourceType.Paint] = data.paint;
+            resources[ResourceType.Reputation] = data.reputation;
         }
     }
 
@@ -220,10 +290,46 @@ public class ResourceManager : MonoBehaviour
             }
         }
     }
+
+    void LoadUpgradesFromJSON()
+    {
+        string path = Path.Combine(Application.streamingAssetsPath, "upgrades.json");
+
+        if (File.Exists(path))
+        {
+            string json = File.ReadAllText(path);
+            UpgradeDataList data = JsonUtility.FromJson<UpgradeDataList>(json);
+
+            upgrades.Clear();
+
+            foreach (UpgradeData u in data.upgrades)
+            {
+                upgrades.Add(new Upgrade(
+                    u.name,
+                    u.cost,
+                    new UpgradeEffect(u.multiplier, u.targetResource),
+                    u.tier
+                ));
+            }
+
+            Debug.Log("Upgrades loaded from JSON");
+        }
+    }
+
+    void OnApplicationQuit()
+    {
+        SaveGame();
+
+        float sessionLength = Time.time - sessionStartTime;
+
+        string path = Application.persistentDataPath + "/playtime.txt";
+
+        string logEntry = "Session Time: " + sessionLength + " seconds\n";
+
+        File.AppendAllText(path, logEntry);
+    }
 }
 
-// -----------------------------
-// Upgrade class
 public class Upgrade
 {
     public string name;
@@ -268,8 +374,6 @@ public struct UpgradeEffect
     }
 }
 
-// -----------------------------
-// Abstract Generator class
 public abstract class Generator
 {
     public string generatorName;

@@ -1,0 +1,10 @@
+void WriteSessionTime()
+{
+    float sessionLength = Time.time - sessionStartTime;
+
+    string path = Application.persistentDataPath + "/sessionTimes.txt";
+
+    string line = "Session Length: " + sessionLength.ToString("F2") + " seconds\n";
+
+    System.IO.File.AppendAllText(path, line);
+}
