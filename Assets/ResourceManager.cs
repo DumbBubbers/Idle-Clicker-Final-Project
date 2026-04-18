@@ -64,6 +64,10 @@ public class ResourceManager : MonoBehaviour
     private float autoSaveTimer;
     private float autoSaveInterval = 30f;
 
+    // EVENT SYSTEM
+    public delegate void UpgradePurchasedHandler(Upgrade upgrade);
+    public event UpgradePurchasedHandler OnUpgradePurchased;
+
     void Start()
     {
         // Initialize resources
@@ -88,6 +92,9 @@ public class ResourceManager : MonoBehaviour
 
         // Step E — Track session start time
         sessionStartTime = Time.time;
+
+        // EVENT LISTENER
+        OnUpgradePurchased += HandleUpgradePurchased;
     }
 
     void Update()
@@ -109,7 +116,6 @@ public class ResourceManager : MonoBehaviour
         {
             yield return new WaitForSeconds(1f);
 
-            // Legacy passive income
             AddResource(ResourceType.CreativeEnergy, murals * muralEnergyRate);
             AddResource(ResourceType.Paint, artAssistants * assistantPaintRate);
 
@@ -143,6 +149,7 @@ public class ResourceManager : MonoBehaviour
         }
     }
 
+    // Manual click action
     public void TagWall()
     {
         AddResource(ResourceType.CreativeEnergy, 1f);
@@ -166,6 +173,7 @@ public class ResourceManager : MonoBehaviour
         {
             Debug.Log(resource.Key + ": " + resource.Value);
         }
+
         Debug.Log("----------------------");
     }
 
@@ -187,24 +195,48 @@ public class ResourceManager : MonoBehaviour
 
     public bool TryPurchaseUpgrade(Upgrade upgrade, out string message)
     {
-        if (upgrade.state != UpgradeState.Available)
+        try
         {
-            message = "Upgrade not available";
+            if (upgrade == null)
+            {
+                throw new System.Exception("Upgrade reference is null");
+            }
+
+            if (upgrade.state != UpgradeState.Available)
+            {
+                message = "Upgrade not available";
+                return false;
+            }
+
+            if (!resources.ContainsKey(upgrade.effect.targetResource))
+            {
+                throw new System.Exception("Resource type missing from dictionary");
+            }
+
+            if (resources[upgrade.effect.targetResource] < upgrade.cost)
+            {
+                message = "Not enough resources";
+                return false;
+            }
+
+            resources[upgrade.effect.targetResource] -= upgrade.cost;
+
+            ApplyUpgrade(upgrade.effect);
+
+            upgrade.state = UpgradeState.Purchased;
+
+            // EVENT TRIGGER
+            OnUpgradePurchased?.Invoke(upgrade);
+
+            message = "Purchased " + upgrade.name;
+            return true;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError("Upgrade Purchase Error: " + e.Message);
+            message = "Error purchasing upgrade";
             return false;
         }
-
-        if (resources[upgrade.effect.targetResource] < upgrade.cost)
-        {
-            message = "Not enough resources";
-            return false;
-        }
-
-        resources[upgrade.effect.targetResource] -= upgrade.cost;
-        ApplyUpgrade(upgrade.effect);
-        upgrade.state = UpgradeState.Purchased;
-
-        message = "Purchased " + upgrade.name;
-        return true;
     }
 
     void ApplyUpgrade(UpgradeEffect effect)
@@ -278,9 +310,9 @@ public class ResourceManager : MonoBehaviour
             if (upgrade.name == "Better Spray Cans")
             {
                 string feedback;
+
                 if (TryPurchaseUpgrade(upgrade, out feedback))
                 {
-                    sprayUpgradeButton.SetActive(false);
                     Debug.Log(feedback);
                 }
                 else
@@ -291,6 +323,7 @@ public class ResourceManager : MonoBehaviour
         }
     }
 
+    // Step C — Load upgrades from JSON file
     void LoadUpgradesFromJSON()
     {
         string path = Path.Combine(Application.streamingAssetsPath, "upgrades.json");
@@ -316,6 +349,16 @@ public class ResourceManager : MonoBehaviour
         }
     }
 
+    void HandleUpgradePurchased(Upgrade upgrade)
+    {
+        Debug.Log("EVENT: Purchased " + upgrade.name);
+
+        if (upgrade.name == "Better Spray Cans")
+        {
+            sprayUpgradeButton.SetActive(false);
+        }
+    }
+
     void OnApplicationQuit()
     {
         SaveGame();
@@ -330,6 +373,8 @@ public class ResourceManager : MonoBehaviour
     }
 }
 
+// -----------------------------
+// Upgrade class
 public class Upgrade
 {
     public string name;
@@ -374,6 +419,8 @@ public struct UpgradeEffect
     }
 }
 
+// -----------------------------
+// Abstract Generator class
 public abstract class Generator
 {
     public string generatorName;
