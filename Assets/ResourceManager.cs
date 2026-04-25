@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using TMPro;
 using System.IO;
@@ -57,44 +58,68 @@ public class ResourceManager : MonoBehaviour
     // Generators
     public List<Generator> generators = new List<Generator>();
 
-    // Step E — Play session tracking
     private float sessionStartTime;
 
-    // Auto-save timer
     private float autoSaveTimer;
     private float autoSaveInterval = 30f;
 
-    // EVENT SYSTEM
     public delegate void UpgradePurchasedHandler(Upgrade upgrade);
     public event UpgradePurchasedHandler OnUpgradePurchased;
 
+    public GameObject endGamePanel;
+    public TMP_Text endGameText;
+    private bool gameEnded = false;
+
     void Start()
     {
-        // Initialize resources
         resources.Add(ResourceType.CreativeEnergy, 0f);
         resources.Add(ResourceType.Paint, 10f);
         resources.Add(ResourceType.Reputation, 0f);
 
-        // Load upgrades from JSON file (Step C)
         LoadUpgradesFromJSON();
 
-        // Start passive income loop
         StartCoroutine(ResourceTick());
 
-        // Add generators
         generators.Add(new GraffitiSprayer(2f, 1.2f));
         generators.Add(new PaintMixer(1f, 1.5f));
 
         StartCoroutine(GeneratorTick());
 
-        // Step D — Load saved game
         LoadGame();
 
-        // Step E — Track session start time
         sessionStartTime = Time.time;
 
-        // EVENT LISTENER
         OnUpgradePurchased += HandleUpgradePurchased;
+    }
+    void InitializeGame()
+    {
+        // Make sure dictionary exists safely
+        if (resources.Count == 0)
+        {
+            resources.Add(ResourceType.CreativeEnergy, 0f);
+            resources.Add(ResourceType.Paint, 10f);
+            resources.Add(ResourceType.Reputation, 0f);
+        }
+
+        // Reset upgrade states safely
+        foreach (Upgrade u in upgrades)
+        {
+            u.state = UpgradeState.Locked;
+        }
+
+        // Reset generators list safety (optional but recommended)
+        if (generators.Count == 0)
+        {
+            generators.Add(new GraffitiSprayer(2f, 1.2f));
+            generators.Add(new PaintMixer(1f, 1.5f));
+        }
+
+        // Restart loops safely
+        StartCoroutine(ResourceTick());
+        StartCoroutine(GeneratorTick());
+
+        sessionStartTime = Time.time;
+        gameEnded = false;
     }
 
     void Update()
@@ -105,8 +130,30 @@ public class ResourceManager : MonoBehaviour
         {
             SaveGame();
             autoSaveTimer = 0f;
-
             Debug.Log("Auto-saved game");
+        }
+
+        if (!gameEnded && resources[ResourceType.Reputation] >= 100f)
+        {
+            TriggerEndGame();
+        }
+
+        // SHIFT + R RESET (FULL RESTART)
+        if (Input.GetKey(KeyCode.LeftShift) && Input.GetKeyDown(KeyCode.R))
+        {
+            ResetGame();
+            Debug.Log("Shift+R: Game fully reset");
+        }
+        if (Keyboard.current != null)
+        {
+            bool shiftHeld = Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
+            bool rPressed = Keyboard.current.rKey.wasPressedThisFrame;
+
+            if (shiftHeld && rPressed)
+            {
+                Debug.Log("SHIFT + R detected (New Input System)");
+                ResetGame();
+            }
         }
     }
 
@@ -149,11 +196,9 @@ public class ResourceManager : MonoBehaviour
         }
     }
 
-    // Manual click action
     public void TagWall()
     {
         AddResource(ResourceType.CreativeEnergy, 1f);
-        Debug.Log("Tagged wall! +1 Creative Energy");
     }
 
     void AddResource(ResourceType type, float amount)
@@ -168,13 +213,6 @@ public class ResourceManager : MonoBehaviour
         creativeEnergyText.text = "Creative Energy: " + resources[ResourceType.CreativeEnergy].ToString("F1");
         paintText.text = "Paint: " + Mathf.FloorToInt(resources[ResourceType.Paint]);
         reputationText.text = "Reputation: " + Mathf.FloorToInt(resources[ResourceType.Reputation]);
-
-        foreach (KeyValuePair<ResourceType, float> resource in resources)
-        {
-            Debug.Log(resource.Key + ": " + resource.Value);
-        }
-
-        Debug.Log("----------------------");
     }
 
     void CheckUpgrades()
@@ -185,7 +223,6 @@ public class ResourceManager : MonoBehaviour
                 resources[upgrade.effect.targetResource] >= upgrade.cost)
             {
                 upgrade.state = UpgradeState.Available;
-                Debug.Log(upgrade.name + " AVAILABLE");
 
                 if (upgrade.name == "Better Spray Cans")
                     sprayUpgradeButton.SetActive(true);
@@ -198,20 +235,16 @@ public class ResourceManager : MonoBehaviour
         try
         {
             if (upgrade == null)
-            {
-                throw new System.Exception("Upgrade reference is null");
-            }
+                throw new System.Exception("Upgrade is null");
 
             if (upgrade.state != UpgradeState.Available)
             {
-                message = "Upgrade not available";
+                message = "Not available";
                 return false;
             }
 
             if (!resources.ContainsKey(upgrade.effect.targetResource))
-            {
-                throw new System.Exception("Resource type missing from dictionary");
-            }
+                throw new System.Exception("Missing resource type");
 
             if (resources[upgrade.effect.targetResource] < upgrade.cost)
             {
@@ -225,7 +258,6 @@ public class ResourceManager : MonoBehaviour
 
             upgrade.state = UpgradeState.Purchased;
 
-            // EVENT TRIGGER
             OnUpgradePurchased?.Invoke(upgrade);
 
             message = "Purchased " + upgrade.name;
@@ -233,7 +265,7 @@ public class ResourceManager : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogError("Upgrade Purchase Error: " + e.Message);
+            Debug.LogError(e.Message);
             message = "Error purchasing upgrade";
             return false;
         }
@@ -242,17 +274,13 @@ public class ResourceManager : MonoBehaviour
     void ApplyUpgrade(UpgradeEffect effect)
     {
         if (effect.targetResource == ResourceType.CreativeEnergy)
-        {
             muralEnergyRate *= effect.multiplier;
-        }
 
         if (effect.targetResource == ResourceType.Paint)
-        {
             assistantPaintRate *= effect.multiplier;
-        }
     }
 
-    void SaveGame() // Save method
+    void SaveGame()
     {
         SaveData data = new SaveData();
 
@@ -265,23 +293,21 @@ public class ResourceManager : MonoBehaviour
         System.Xml.Serialization.XmlSerializer serializer =
             new System.Xml.Serialization.XmlSerializer(typeof(SaveData));
 
-        System.IO.FileStream stream = new System.IO.FileStream(path, System.IO.FileMode.Create);
+        FileStream stream = new FileStream(path, FileMode.Create);
         serializer.Serialize(stream, data);
         stream.Close();
     }
 
-    void LoadGame() // Load method
+    void LoadGame()
     {
         string path = Application.persistentDataPath + "/save.xml";
 
-        if (System.IO.File.Exists(path))
+        if (File.Exists(path))
         {
             System.Xml.Serialization.XmlSerializer serializer =
                 new System.Xml.Serialization.XmlSerializer(typeof(SaveData));
 
-            System.IO.FileStream stream =
-                new System.IO.FileStream(path, System.IO.FileMode.Open);
-
+            FileStream stream = new FileStream(path, FileMode.Open);
             SaveData data = serializer.Deserialize(stream) as SaveData;
             stream.Close();
 
@@ -310,20 +336,12 @@ public class ResourceManager : MonoBehaviour
             if (upgrade.name == "Better Spray Cans")
             {
                 string feedback;
-
-                if (TryPurchaseUpgrade(upgrade, out feedback))
-                {
-                    Debug.Log(feedback);
-                }
-                else
-                {
-                    Debug.Log(feedback);
-                }
+                TryPurchaseUpgrade(upgrade, out feedback);
+                Debug.Log(feedback);
             }
         }
     }
 
-    // Step C — Load upgrades from JSON file
     void LoadUpgradesFromJSON()
     {
         string path = Path.Combine(Application.streamingAssetsPath, "upgrades.json");
@@ -344,19 +362,68 @@ public class ResourceManager : MonoBehaviour
                     u.tier
                 ));
             }
-
-            Debug.Log("Upgrades loaded from JSON");
         }
     }
 
     void HandleUpgradePurchased(Upgrade upgrade)
     {
-        Debug.Log("EVENT: Purchased " + upgrade.name);
-
         if (upgrade.name == "Better Spray Cans")
-        {
             sprayUpgradeButton.SetActive(false);
-        }
+    }
+
+    void TriggerEndGame()
+    {
+        gameEnded = true;
+
+        StopAllCoroutines();
+
+        if (endGamePanel != null)
+            endGamePanel.SetActive(true);
+
+        if (endGameText != null)
+            endGameText.text = "You turned the city into a living artwork.";
+    }
+
+    public void ResetGame()
+    {
+        StopAllCoroutines();
+
+        // reset resources
+        resources[ResourceType.CreativeEnergy] = 0f;
+        resources[ResourceType.Paint] = 10f;
+        resources[ResourceType.Reputation] = 0f;
+
+        // reset production values
+        murals = 1;
+        artAssistants = 1;
+
+        muralEnergyRate = 2f;
+        assistantPaintRate = 1f;
+
+        gameEnded = false;
+
+        if (endGamePanel != null)
+            endGamePanel.SetActive(false);
+
+        // reset upgrades
+        foreach (Upgrade u in upgrades)
+            u.state = UpgradeState.Locked;
+
+        if (sprayUpgradeButton != null)
+            sprayUpgradeButton.SetActive(false);
+
+        // Restart systems so values update again
+        StartCoroutine(ResourceTick());
+        StartCoroutine(GeneratorTick());
+
+        Debug.Log("FULL RESET COMPLETE + SYSTEMS RESTARTED");
+    }
+
+    public void DevJumpToEnd()
+    {
+        resources[ResourceType.CreativeEnergy] = 500f;
+        resources[ResourceType.Paint] = 500f;
+        resources[ResourceType.Reputation] = 100f;
     }
 
     void OnApplicationQuit()
@@ -374,7 +441,6 @@ public class ResourceManager : MonoBehaviour
 }
 
 // -----------------------------
-// Upgrade class
 public class Upgrade
 {
     public string name;
@@ -420,7 +486,6 @@ public struct UpgradeEffect
 }
 
 // -----------------------------
-// Abstract Generator class
 public abstract class Generator
 {
     public string generatorName;
