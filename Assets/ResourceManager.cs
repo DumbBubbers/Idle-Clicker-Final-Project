@@ -1,10 +1,11 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
-using TMPro;
-using System.IO;
 
 [System.Serializable] // Move data collection to file
 public class UpgradeData
@@ -54,6 +55,13 @@ public class ResourceManager : MonoBehaviour
 
     // UI Buttons for upgrades
     public GameObject sprayUpgradeButton;
+    public GameObject vibrantUpgradeButton;
+
+    // Tag Wall button movement
+    public RectTransform tagWallButtonRect;
+
+    // ORIGINAL POSITION (NEW)
+    private Vector2 tagWallOriginalPos;
 
     // Generators
     public List<Generator> generators = new List<Generator>();
@@ -70,6 +78,18 @@ public class ResourceManager : MonoBehaviour
     public TMP_Text endGameText;
     private bool gameEnded = false;
 
+    // Win UI Reference
+    public GameObject winPanel;
+    public TMP_Text winText;
+
+    private bool winTriggered = false;
+
+    // Tag Wall Button
+    public GameObject tagWallButton;
+
+    // Camera background
+    private Camera mainCamera;
+
     void Start()
     {
         resources.Add(ResourceType.CreativeEnergy, 0f);
@@ -78,53 +98,59 @@ public class ResourceManager : MonoBehaviour
 
         LoadUpgradesFromJSON();
 
-        StartCoroutine(ResourceTick());
-
         generators.Add(new GraffitiSprayer(2f, 1.2f));
         generators.Add(new PaintMixer(1f, 1.5f));
-
-        StartCoroutine(GeneratorTick());
 
         LoadGame();
 
         sessionStartTime = Time.time;
 
         OnUpgradePurchased += HandleUpgradePurchased;
+
+        if (tagWallButtonRect != null)
+        {
+            tagWallOriginalPos = tagWallButtonRect.anchoredPosition;
+        }
+        // Ensure win UI starts hidden
+        if (winText != null)
+        {
+            winText.gameObject.SetActive(false);
+        }
+
+        if (winPanel != null)
+        {
+            winPanel.SetActive(false);
+        }
     }
-    void InitializeGame()
+
+    void LoadUpgradesFromJSON()
     {
-        // Make sure dictionary exists safely
-        if (resources.Count == 0)
+        string path = Path.Combine(Application.streamingAssetsPath, "upgrades.json");
+
+        if (File.Exists(path))
         {
-            resources.Add(ResourceType.CreativeEnergy, 0f);
-            resources.Add(ResourceType.Paint, 10f);
-            resources.Add(ResourceType.Reputation, 0f);
+            string json = File.ReadAllText(path);
+            UpgradeDataList data = JsonUtility.FromJson<UpgradeDataList>(json);
+
+            upgrades.Clear();
+
+            foreach (UpgradeData u in data.upgrades)
+            {
+                upgrades.Add(new Upgrade(
+                    u.name,
+                    u.cost,
+                    new UpgradeEffect(u.multiplier, u.targetResource),
+                    u.tier
+                ));
+            }
         }
-
-        // Reset upgrade states safely
-        foreach (Upgrade u in upgrades)
-        {
-            u.state = UpgradeState.Locked;
-        }
-
-        // Reset generators list safety (optional but recommended)
-        if (generators.Count == 0)
-        {
-            generators.Add(new GraffitiSprayer(2f, 1.2f));
-            generators.Add(new PaintMixer(1f, 1.5f));
-        }
-
-        // Restart loops safely
-        StartCoroutine(ResourceTick());
-        StartCoroutine(GeneratorTick());
-
-        sessionStartTime = Time.time;
-        gameEnded = false;
     }
 
     void Update()
     {
-        autoSaveTimer += Time.deltaTime;
+        float dt = Time.deltaTime;
+
+        autoSaveTimer += dt;
 
         if (autoSaveTimer >= autoSaveInterval)
         {
@@ -133,17 +159,24 @@ public class ResourceManager : MonoBehaviour
             Debug.Log("Auto-saved game");
         }
 
-        if (!gameEnded && resources[ResourceType.Reputation] >= 100f)
+        if (!gameEnded && !winTriggered && resources[ResourceType.Reputation] >= 100f)
         {
-            TriggerEndGame();
+            winTriggered = true;
+
+            if (mainCamera != null)
+            {
+                mainCamera.clearFlags = CameraClearFlags.SolidColor;
+                mainCamera.backgroundColor = Color.green;
+                RenderSettings.skybox = null;
+            }
+
+            StartCoroutine(WinSequence());
         }
 
-        // SHIFT + R RESET (FULL RESTART)
-        if (Input.GetKey(KeyCode.LeftShift) && Input.GetKeyDown(KeyCode.R))
-        {
-            ResetGame();
-            Debug.Log("Shift+R: Game fully reset");
-        }
+        // STOP GAME LOOP DURING WIN SCREEN
+        if (winTriggered)
+            return;
+
         if (Keyboard.current != null)
         {
             bool shiftHeld = Keyboard.current.leftShiftKey.isPressed || Keyboard.current.rightShiftKey.isPressed;
@@ -151,54 +184,155 @@ public class ResourceManager : MonoBehaviour
 
             if (shiftHeld && rPressed)
             {
-                Debug.Log("SHIFT + R detected (New Input System)");
                 ResetGame();
+
+                winTriggered = false;
+                gameEnded = false;
+
+                if (mainCamera != null)
+                    mainCamera.backgroundColor = Color.white;
+
+                Debug.Log("SHIFT + R detected");
+
+                if (sprayUpgradeButton != null)
+                    sprayUpgradeButton.SetActive(false);
+
+                if (vibrantUpgradeButton != null)
+                    vibrantUpgradeButton.SetActive(false);
             }
-        }
-    }
+            else if (rPressed)
+            {
+                ResetTagWallPosition();
+                Debug.Log("R pressed: Tag Wall reset");
+            }
 
-    IEnumerator ResourceTick()
-    {
-        while (true)
-        {
-            yield return new WaitForSeconds(1f);
+            bool plusPressed =
+                Keyboard.current.equalsKey.wasPressedThisFrame ||
+                Keyboard.current.numpadPlusKey.wasPressedThisFrame;
 
-            AddResource(ResourceType.CreativeEnergy, murals * muralEnergyRate);
-            AddResource(ResourceType.Paint, artAssistants * assistantPaintRate);
+            if (shiftHeld && plusPressed)
+            {
+                resources[ResourceType.Reputation] = 99f;
+                Debug.Log("SHIFT + +: Reputation set to 99");
+            }
 
             CheckUpgrades();
-            DisplayResources();
-            UpdateUpgradeUI();
+        }
+
+        AddResource(ResourceType.CreativeEnergy, murals * muralEnergyRate * dt);
+        AddResource(ResourceType.Paint, artAssistants * assistantPaintRate * dt);
+
+        foreach (Generator gen in generators)
+        {
+            if (gen is GraffitiSprayer)
+            {
+                float current = resources[ResourceType.CreativeEnergy];
+                gen.Produce(ref current, dt);
+                resources[ResourceType.CreativeEnergy] = current;
+            }
+            else if (gen is PaintMixer)
+            {
+                float current = resources[ResourceType.Paint];
+                gen.Produce(ref current, dt);
+                resources[ResourceType.Paint] = current;
+            }
+        }
+
+        DisplayResources();
+        UpdateUpgradeUI();
+    }
+
+    // ================= WIN SEQUENCE =================
+    private IEnumerator WinSequence()
+    {
+        yield return new WaitForSeconds(1f);
+
+        if (creativeEnergyText) creativeEnergyText.text = "";
+        if (paintText) paintText.text = "";
+        if (reputationText) reputationText.text = "";
+        if (upgradeText) upgradeText.text = "";
+
+        if (sprayUpgradeButton) sprayUpgradeButton.SetActive(false);
+        if (vibrantUpgradeButton) vibrantUpgradeButton.SetActive(false);
+
+        if (tagWallButton != null)
+            tagWallButton.SetActive(false);
+
+        if (endGamePanel) endGamePanel.SetActive(false);
+
+        if (winPanel != null)
+            winPanel.SetActive(true);
+
+        if (winText != null)
+        {
+            winText.gameObject.SetActive(true);
+            winText.enabled = true;
+            winText.text = "You're popular now! Congratulations!";
+        }
+        else
+        {
+            Debug.LogWarning("winText is NOT assigned in Inspector");
         }
     }
 
-    IEnumerator GeneratorTick()
+    public void ResetTagWallPosition()
     {
-        while (true)
+        if (tagWallButtonRect != null)
         {
-            yield return new WaitForSeconds(1f);
-
-            foreach (Generator gen in generators)
-            {
-                if (gen is GraffitiSprayer)
-                {
-                    float current = resources[ResourceType.CreativeEnergy];
-                    gen.Produce(ref current);
-                    resources[ResourceType.CreativeEnergy] = current;
-                }
-                else if (gen is PaintMixer)
-                {
-                    float current = resources[ResourceType.Paint];
-                    gen.Produce(ref current);
-                    resources[ResourceType.Paint] = current;
-                }
-            }
+            tagWallButtonRect.anchoredPosition = tagWallOriginalPos;
         }
     }
 
     public void TagWall()
     {
+        PointerEventData eventData = new PointerEventData(EventSystem.current);
+
         AddResource(ResourceType.CreativeEnergy, 1f);
+        AddResource(ResourceType.Reputation, 0.1f);
+
+        if (tagWallButtonRect != null)
+        {
+            MoveButtonRandomly(tagWallButtonRect);
+        }
+    }
+
+    void MoveButtonRandomly(RectTransform button)
+    {
+        RectTransform parent = button.parent as RectTransform;
+        if (parent == null) return;
+
+        float width = parent.rect.width;
+        float height = parent.rect.height;
+
+        float safeMarginX = width * 0.35f;
+        float safeMarginY = height * 0.35f;
+
+        float minX = -width / 2f + 50f;
+        float maxX = width / 2f - 50f;
+        float minY = -height / 2f + 50f;
+        float maxY = height / 2f - 50f;
+
+        Vector2 newPos;
+        int safetyAttempts = 0;
+
+        do
+        {
+            float randomX = Random.Range(minX, maxX);
+            float randomY = Random.Range(minY, maxY);
+
+            newPos = new Vector2(randomX, randomY);
+            safetyAttempts++;
+
+            bool inBlockedZone =
+                newPos.x < -safeMarginX &&
+                newPos.y > height / 2f - safeMarginY;
+
+            if (!inBlockedZone)
+                break;
+
+        } while (safetyAttempts < 20);
+
+        button.anchoredPosition = newPos;
     }
 
     void AddResource(ResourceType type, float amount)
@@ -215,6 +349,7 @@ public class ResourceManager : MonoBehaviour
         reputationText.text = "Reputation: " + Mathf.FloorToInt(resources[ResourceType.Reputation]);
     }
 
+
     void CheckUpgrades()
     {
         foreach (Upgrade upgrade in upgrades)
@@ -226,6 +361,9 @@ public class ResourceManager : MonoBehaviour
 
                 if (upgrade.name == "Better Spray Cans")
                     sprayUpgradeButton.SetActive(true);
+
+                if (upgrade.name == "Vibrant Paint")
+                    vibrantUpgradeButton.SetActive(true);
             }
         }
     }
@@ -253,11 +391,8 @@ public class ResourceManager : MonoBehaviour
             }
 
             resources[upgrade.effect.targetResource] -= upgrade.cost;
-
             ApplyUpgrade(upgrade.effect);
-
             upgrade.state = UpgradeState.Purchased;
-
             OnUpgradePurchased?.Invoke(upgrade);
 
             message = "Purchased " + upgrade.name;
@@ -322,9 +457,7 @@ public class ResourceManager : MonoBehaviour
         string text = "Upgrades:\n";
 
         foreach (Upgrade upgrade in upgrades)
-        {
             text += upgrade.name + " - " + upgrade.state + "\n";
-        }
 
         upgradeText.text = text;
     }
@@ -342,25 +475,15 @@ public class ResourceManager : MonoBehaviour
         }
     }
 
-    void LoadUpgradesFromJSON()
+    public void BuyVibrantPaint()
     {
-        string path = Path.Combine(Application.streamingAssetsPath, "upgrades.json");
-
-        if (File.Exists(path))
+        foreach (Upgrade upgrade in upgrades)
         {
-            string json = File.ReadAllText(path);
-            UpgradeDataList data = JsonUtility.FromJson<UpgradeDataList>(json);
-
-            upgrades.Clear();
-
-            foreach (UpgradeData u in data.upgrades)
+            if (upgrade.name == "Vibrant Paint")
             {
-                upgrades.Add(new Upgrade(
-                    u.name,
-                    u.cost,
-                    new UpgradeEffect(u.multiplier, u.targetResource),
-                    u.tier
-                ));
+                string feedback;
+                TryPurchaseUpgrade(upgrade, out feedback);
+                Debug.Log(feedback);
             }
         }
     }
@@ -369,31 +492,28 @@ public class ResourceManager : MonoBehaviour
     {
         if (upgrade.name == "Better Spray Cans")
             sprayUpgradeButton.SetActive(false);
+
+        if (upgrade.name == "Vibrant Paint")
+            vibrantUpgradeButton.SetActive(false);
     }
 
     void TriggerEndGame()
     {
         gameEnded = true;
 
-        StopAllCoroutines();
-
         if (endGamePanel != null)
             endGamePanel.SetActive(true);
 
         if (endGameText != null)
-            endGameText.text = "You turned the city into a living artwork.";
+            endGameText.text = "You're popular now!";
     }
 
     public void ResetGame()
     {
-        StopAllCoroutines();
-
-        // reset resources
         resources[ResourceType.CreativeEnergy] = 0f;
         resources[ResourceType.Paint] = 10f;
         resources[ResourceType.Reputation] = 0f;
 
-        // reset production values
         murals = 1;
         artAssistants = 1;
 
@@ -401,22 +521,27 @@ public class ResourceManager : MonoBehaviour
         assistantPaintRate = 1f;
 
         gameEnded = false;
+        winTriggered = false;
 
         if (endGamePanel != null)
             endGamePanel.SetActive(false);
 
-        // reset upgrades
+        if (winPanel != null)
+            winPanel.SetActive(false);
+
         foreach (Upgrade u in upgrades)
             u.state = UpgradeState.Locked;
 
         if (sprayUpgradeButton != null)
             sprayUpgradeButton.SetActive(false);
 
-        // Restart systems so values update again
-        StartCoroutine(ResourceTick());
-        StartCoroutine(GeneratorTick());
+        if (vibrantUpgradeButton != null)
+            vibrantUpgradeButton.SetActive(false);
 
-        Debug.Log("FULL RESET COMPLETE + SYSTEMS RESTARTED");
+        if (tagWallButton != null)
+            tagWallButton.SetActive(true);
+
+        Debug.Log("FULL RESET COMPLETE");
     }
 
     public void DevJumpToEnd()
@@ -497,7 +622,7 @@ public abstract class Generator
         this.baseProduction = baseProduction;
     }
 
-    public abstract void Produce(ref float resourceAmount);
+    public abstract void Produce(ref float resourceAmount, float dt);
 }
 
 public class GraffitiSprayer : Generator
@@ -510,9 +635,9 @@ public class GraffitiSprayer : Generator
         this.efficiency = efficiency;
     }
 
-    public override void Produce(ref float resourceAmount)
+    public override void Produce(ref float resourceAmount, float dt)
     {
-        resourceAmount += baseProduction * efficiency;
+        resourceAmount += baseProduction * efficiency * dt;
     }
 }
 
@@ -526,8 +651,8 @@ public class PaintMixer : Generator
         this.quality = quality;
     }
 
-    public override void Produce(ref float resourceAmount)
+    public override void Produce(ref float resourceAmount, float dt)
     {
-        resourceAmount += baseProduction * quality;
+        resourceAmount += baseProduction * quality * dt;
     }
 }
